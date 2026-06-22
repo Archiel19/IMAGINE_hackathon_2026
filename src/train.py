@@ -4,9 +4,13 @@ import hydra
 import lightning as L
 import rootutils
 import torch
+import os
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
+from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason, EarlyStopping
 from omegaconf import DictConfig
+from codecarbon import EmissionsTracker
+
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
@@ -32,12 +36,14 @@ from src.utils import (
     get_metric_value,
     instantiate_callbacks,
     instantiate_loggers,
+    instantiate_emissions_tracker,
     log_hyperparameters,
     task_wrapper,
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
+# Uses TensorFloat32 or bfloat16 for matrix multiplication when available
 torch.set_float32_matmul_precision('high')
 
 @task_wrapper
@@ -55,18 +61,24 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
-    log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
-
+    if 'CosineAnnealingLR' in cfg.module['main_scheduler']['_target_']:
+        datamodule.prepare_data()
+        bsize = cfg.datamodule.batch_size
+        steps_per_epoch = (len(datamodule.data_train) + bsize - 1) / bsize  # Ceiling division
+        cfg.module.main_scheduler.T_max = cfg.trainer.max_epochs * steps_per_epoch - cfg.module.warmup_steps
+    
+    log.info(f"Instantiating module <{cfg.module._target_}>")
+    model: LightningModule = hydra.utils.instantiate(cfg.module)
+    
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
-
+    
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
 
@@ -83,25 +95,26 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
 
-    if cfg.get("train"):
-        log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+    log.info("Starting training!")
+    trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+    
+    # Check why training stopped
+    early_stopping = None
+    for callback in callbacks:
+        if isinstance(callback, EarlyStopping):
+            early_stopping = callback
+            break
+    if early_stopping:
+        if early_stopping.stopping_reason == EarlyStoppingReason.STOPPING_THRESHOLD:
+            print("Training stopped due to reaching stopping threshold")
+        elif early_stopping.stopping_reason == EarlyStoppingReason.NOT_STOPPED:
+            print("Training completed normally without early stopping")
 
-    train_metrics = trainer.callback_metrics
+        # Access human-readable message
+        if early_stopping.stopping_reason_message:
+            print(f"Details: {early_stopping.stopping_reason_message}")
 
-    if cfg.get("test"):
-        log.info("Starting testing!")
-        ckpt_path = trainer.checkpoint_callback.best_model_path
-        if ckpt_path == "":
-            log.warning("Best ckpt not found! Using current weights for testing...")
-            ckpt_path = None
-        trainer.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
-        log.info(f"Best ckpt path: {ckpt_path}")
-
-    test_metrics = trainer.callback_metrics
-
-    # merge train and test metrics
-    metric_dict = {**train_metrics, **test_metrics}
+    metric_dict = trainer.callback_metrics
 
     return metric_dict, object_dict
 
@@ -116,9 +129,14 @@ def main(cfg: DictConfig) -> Optional[float]:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
+    
+    # Create CodeCarbon emissions tracker
+    log.info("Instantiating CodeCarbon tracker")
+    tracker = instantiate_emissions_tracker(cfg)
 
     # train the model
-    metric_dict, _ = train(cfg)
+    with tracker:
+        metric_dict, _ = train(cfg)
 
     # safely retrieve metric value for hydra-based hyperparameter optimization
     metric_value = get_metric_value(

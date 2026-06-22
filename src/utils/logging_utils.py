@@ -17,7 +17,7 @@ def log_hyperparameters(object_dict: Dict[str, Any]) -> None:
 
     :param object_dict: A dictionary containing the following objects:
         - `"cfg"`: A DictConfig object containing the main config.
-        - `"model"`: The Lightning model.
+        - `"model"`: The Lightning module.
         - `"trainer"`: The Lightning trainer.
     """
     hparams = {}
@@ -30,7 +30,7 @@ def log_hyperparameters(object_dict: Dict[str, Any]) -> None:
         log.warning("Logger not found! Skipping hyperparameter logging...")
         return
 
-    hparams["model"] = cfg["model"]
+    hparams["model"] = cfg["module"]
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())
@@ -41,7 +41,7 @@ def log_hyperparameters(object_dict: Dict[str, Any]) -> None:
         p.numel() for p in model.parameters() if not p.requires_grad
     )
 
-    hparams["data"] = cfg["data"]
+    hparams["datamodule"] = cfg["datamodule"]
     hparams["trainer"] = cfg["trainer"]
 
     hparams["callbacks"] = cfg.get("callbacks")

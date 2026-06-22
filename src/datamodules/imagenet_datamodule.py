@@ -1,12 +1,38 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
+import os
+from pathlib import Path
+from torchvision.io import read_image, ImageReadMode
 from lightning import LightningDataModule
-from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate
-from torchvision.datasets import ImageNet
+from torchvision.datasets import ImageFolder
+from torchvision.datasets.folder import IMG_EXTENSIONS, default_loader
 import torchvision.transforms.v2 as T
 
+
+class UnlabeledImageFolder:
+    # From https://github.com/pytorch/vision/issues/9050
+
+    def __init__(self, root_dir, patterns=None, transform=None):
+        self.root = Path(root_dir)
+        self.images = []
+        if patterns is None:
+            patterns = [f"**/*{ext}" for ext in IMG_EXTENSIONS]
+        for pattern in patterns:
+            self.images.extend(self.root.glob(pattern, case_sensitive=False))
+        self.images = sorted(self.images)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, i):
+        img = default_loader(self.images[i])
+        if self.transform:
+            img = self.transform(img)
+        return img
 
 class ImageNetDataModule(LightningDataModule):
     """`LightningDataModule` for the ImageNet dataset.
@@ -48,18 +74,20 @@ class ImageNetDataModule(LightningDataModule):
 
     def __init__(
         self,
-        data_dir: str = "data/",
-        train_val_split: Tuple[int, int] = (0.99, 0.01),
+        data_path: str = "data/",
+        train_dir: str = "train",
+        val_dir: str = "val",
+        test_dir: str = "test",
         eval_resize_size: int = 256,
         eval_crop_size: int = 224,
         train_crop_size: int = 224,
         interpolation: str = 'bilinear',
-        hflip_prob: float = 0.5,
+        hflip_prob: float = 0.0,
         auto_augment_policy: str = None,
         ra_magnitude: int = None,
         augmix_severity: int = None,
         cutmix_alpha: float = 0.0,
-        mixup_alpha: float = 0.2,
+        mixup_alpha: float = 0.0,
         random_erase_prob: float = 0.0,
         batch_size: int = 64,
         num_workers: int = 4,
@@ -68,10 +96,24 @@ class ImageNetDataModule(LightningDataModule):
     ) -> None:
         """Initialize an `ImageNetDataModule`.
 
-        :param data_dir: The data directory. Defaults to `"data/"`.
-        :param train_val_split: The train and validation split. Defaults to `(0.99, 0.01)`.
+        :param data_path: The data directory path. Defaults to `"data/"`.
+        :param train_dir: The training data directory name. Defaults to `"train"`.
+        :param val_dir: The validation data directory name. Defaults to `"val"`.
+        :param test_dir: The test data directory name. Defaults to `"test"`.
+        :param eval_resize_size: The size to resize the shorter side of the image for evaluation. Defaults to `256`.
+        :param eval_crop_size: The size to center crop the image for evaluation. Defaults to `224`.
+        :param train_crop_size: The size to randomly crop the image for training. Defaults to `224`.
+        :param interpolation: The interpolation method to use for resizing. Defaults to `'bilinear'`.
+        :param hflip_prob: The probability of applying random horizontal flip during training. Defaults to `0.0`.
+        :param auto_augment_policy: The auto-augment policy to use during training. Can be one of `"ra"`, `"ta_wide"`, `"augmix"`, or any policy supported by `torchvision.transforms.AutoAugmentPolicy`. Defaults to `None` (no auto-augmentation).
+        :param ra_magnitude: The magnitude to use for RandAugment if `auto_augment_policy` is set to `"ra"`. Defaults to `None`.
+        :param augmix_severity: The severity to use for AugMix if `auto_augment_policy` is set to `"augmix"`. Defaults to `None`.
+        :param cutmix_alpha: The alpha value for CutMix augmentation. Defaults to `0.0` (no CutMix).
+        :param mixup_alpha: The alpha value for MixUp augmentation. Defaults to `0.0` (no MixUp).
+        :param random_erase_prob: The probability of applying random erasing during training. Defaults to `0.0`.
         :param batch_size: The batch size. Defaults to `64`.
         :param num_workers: The number of workers. Defaults to `0`.
+        :param prefetch_factor: The number of batches to prefetch. Defaults to `2`.
         :param pin_memory: Whether to pin memory. Defaults to `False`.
         """
         super().__init__()
@@ -79,7 +121,7 @@ class ImageNetDataModule(LightningDataModule):
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
-
+        
         # data transformations
         interpolation_mode = T.InterpolationMode(interpolation)
         imagenet_mean = (0.485, 0.456, 0.406)
@@ -154,8 +196,28 @@ class ImageNetDataModule(LightningDataModule):
 
         Do not use it to assign state (self.x = y).
         """
-        ImageNet(root=self.hparams.data_dir, split='train')
-        ImageNet(root=self.hparams.data_dir, split='val')
+        if not self.hparams.test_dir:  # Train mode
+            if not self.data_train and not self.data_val:
+                # TODO download from Moravia?
+                
+                self.data_train = ImageFolder(
+                    os.path.join(self.hparams.data_path, self.hparams.train_dir),
+                    transform=self.train_transforms
+                )
+                self.data_val = ImageFolder(
+                    os.path.join(self.hparams.data_path, self.hparams.val_dir),
+                    transform=self.eval_transforms
+                )
+        else:  # Test mode
+            if not self.data_test:
+                self.data_test = UnlabeledImageFolder(
+                    os.path.join(self.hparams.data_path, self.hparams.test_dir),
+                    transform=self.eval_transforms
+                )
+                # with open("ground_truth.txt", "w") as f:
+                #     for img_path, label in sorted(self.data_test.samples, key=lambda t: t[0].split(os.sep)[-1]):
+                #         file_name = img_path.split(os.sep)[-1]
+                #         f.write(f"{file_name} - {label}\n")
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -167,31 +229,8 @@ class ImageNetDataModule(LightningDataModule):
 
         :param stage: The stage to setup. Either `"fit"`, `"validate"`, `"test"`, or `"predict"`. Defaults to ``None``.
         """
-        # Divide batch size by the number of devices.
-        if self.trainer is not None:
-            if self.hparams.batch_size % self.trainer.world_size != 0:
-                raise RuntimeError(
-                    f"Batch size ({self.hparams.batch_size}) is not divisible by the number of devices ({self.trainer.world_size})."
-                )
-            self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
+        pass
 
-        # load and split datasets only if not loaded already
-        if not self.data_train and not self.data_val and not self.data_test:
-            dataset = ImageNet(self.hparams.data_dir, split='train')
-            
-            # Split indices
-            train_indices, val_indices = random_split(
-                dataset=range(len(dataset)),
-                lengths=self.hparams.train_val_split,
-                generator=torch.Generator().manual_seed(42)
-            )
-            
-            train_set = ImageNet(self.hparams.data_dir, split='train', transform=self.train_transforms)
-            val_set = ImageNet(self.hparams.data_dir, split='train', transform=self.eval_transforms)
-            self.data_test = ImageNet(self.hparams.data_dir, split='val', transform=self.eval_transforms)
-            
-            self.data_train = Subset(train_set, train_indices)
-            self.data_val = Subset(val_set, val_indices)
 
     def train_dataloader(self) -> DataLoader[Any]:
         """Create and return the train dataloader.
@@ -219,7 +258,7 @@ class ImageNetDataModule(LightningDataModule):
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
-            shuffle=False,
+            shuffle=True,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -235,6 +274,13 @@ class ImageNetDataModule(LightningDataModule):
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
         )
+        
+    def predict_dataloader(self) -> DataLoader[Any]:
+        """Create and return the predict dataloader.
+
+        :return: The predict dataloader.
+        """
+        return self.test_dataloader()
 
     def teardown(self, stage: Optional[str] = None) -> None:
         """Lightning hook for cleaning up after `trainer.fit()`, `trainer.validate()`,

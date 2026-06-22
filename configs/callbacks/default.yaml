@@ -1,14 +1,17 @@
 defaults:
   - model_checkpoint
+  - early_stopping
   - rich_progress_bar
   - _self_
 
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:02d}"
-  monitor: "val/acc"
-  mode: "max"
   save_last: True
-  auto_insert_metric_name: True
-  every_n_epochs: 45
-  save_on_train_epoch_end: True
+  every_n_epochs: 25
+  save_on_train_epoch_end: False # runs at end of validation
+
+early_stopping:
+  monitor: "val/acc5"
+  mode: "max"
+  stopping_threshold: 0.875  # This should get 85% top-5 test accuracy

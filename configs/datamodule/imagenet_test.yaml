@@ -1,0 +1,6 @@
+defaults:
+  - default
+
+train_dir: null
+val_dir: null
+test_dir: test

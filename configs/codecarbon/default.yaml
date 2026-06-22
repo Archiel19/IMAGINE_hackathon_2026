@@ -1,0 +1,13 @@
+_target_: codecarbon.EmissionsTracker
+project_name: "imagine-hackathon-2026"
+experiment_name: ${experiment_name}
+experiment_id: ${experiment_name}
+run_id: ${now:%Y-%m-%d}_${now:%H-%M-%S}
+measure_power_secs: 10
+save_to_file: True
+save_to_api: True
+api_call_interval: 6
+log_level: "WARNING"
+output_dir: ${paths.codecarbon_dir}
+tracking_mode: "process"
+gpu_ids: "0"

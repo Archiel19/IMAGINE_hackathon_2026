@@ -2,21 +2,11 @@ from typing import Any, Dict, Tuple
 
 import torch
 from lightning import LightningModule
-from torchmetrics import MaxMetric, MeanMetric
+from torchmetrics import MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
-# --schedule 31 61: decrease learning rate at these epochs
-# --gamma 0.1: LR is multiplied by gamma on schedule
-# --train-batch 256: train batch size
-# --test-batch 200: test batch size
-# --lr 0.1: initial learning rate
-# --momentum 0.9
-# --weight-decay 1e-4
-# --depth 29: model depth
-# --cardinality 32: resnet cardinality (group)
-# --base-width 4: ResNet base width
-# --widen-factor 4
-# 
-class ImageNetLitModule(LightningModule):
+
+
+class ImageNetModule(LightningModule):
     """`LightningModule` for ImageNet classification.
 
     A `LightningModule` implements 8 key methods:
@@ -52,21 +42,26 @@ class ImageNetLitModule(LightningModule):
     def __init__(
         self,
         net: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler,
         compile: bool,
+        optimizer: torch.optim.Optimizer,
+        warmup_steps: int,
+        main_scheduler: torch.optim.lr_scheduler,
+        warmup_scheduler: torch.optim.lr_scheduler = None,
     ) -> None:
-        """Initialize an `ImageNetLitModule`.
+        """Initialize an `ImageNetModule`.
 
         :param net: The model to train.
+        :param compile: Whether to use `torch.compile` on the model for training.
         :param optimizer: The optimizer to use for training.
-        :param scheduler: The learning rate scheduler to use for training.
+        :param warmup_steps: The number of warmup steps to use for training. If 0, no warmup scheduler will be used.
+        :param main_scheduler: The main learning rate scheduler to use for training.
+        :param warmup_scheduler: The learning rate scheduler to use for warmup.
         """
         super().__init__()
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
-        self.save_hyperparameters(logger=False)
+        self.save_hyperparameters(logger=True, ignore=['net'])
 
         self.net = net
 
@@ -84,10 +79,6 @@ class ImageNetLitModule(LightningModule):
         # for averaging loss across batches
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
-
-        # for tracking best so far validation accuracy
-        self.val_acc_best = MaxMetric()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through the model `self.net`.
@@ -104,7 +95,6 @@ class ImageNetLitModule(LightningModule):
         self.val_loss.reset()
         self.val_acc1.reset()
         self.val_acc5.reset()
-        self.val_acc_best.reset()
 
     def model_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor]
@@ -115,14 +105,15 @@ class ImageNetLitModule(LightningModule):
 
         :return: A tuple containing (in order):
             - A tensor of losses.
-            - A tensor of predictions.
+            - A tensor of logits.
             - A tensor of target labels.
         """
         x, y = batch
         logits = self.forward(x)
         loss = self.criterion(logits, y)
-        preds = torch.argmax(logits, dim=1)
-        return loss, preds, y
+        if y.dim() > 1:
+            y = y.argmax(dim=1)
+        return loss, logits, y.long()
 
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -134,13 +125,15 @@ class ImageNetLitModule(LightningModule):
         :param batch_idx: The index of the current batch.
         :return: A tensor of losses between model predictions and targets.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, logits, targets = self.model_step(batch)
 
         # update and log metrics
         self.train_loss(loss)
-        self.train_acc(preds, targets)
+        self.train_acc1(logits, targets)
+        self.train_acc5(logits, targets)
         self.log("train/loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/acc", self.train_acc, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/acc1", self.train_acc1, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/acc5", self.train_acc5, on_step=True, on_epoch=True, prog_bar=True)
 
         # return loss or backpropagation will fail
         return loss
@@ -156,21 +149,19 @@ class ImageNetLitModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, logits, targets = self.model_step(batch)
 
         # update and log metrics
         self.val_loss(loss)
-        self.val_acc(preds, targets)
+        self.val_acc1(logits, targets)
+        self.val_acc5(logits, targets)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/acc1", self.val_acc1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/acc5", self.val_acc5, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        acc = self.val_acc.compute()  # get current val acc
-        self.val_acc_best(acc)  # update best so far val acc
-        # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
-        # otherwise metric would be reset by lightning after each epoch
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        pass
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Perform a single test step on a batch of data from the test set.
@@ -179,13 +170,13 @@ class ImageNetLitModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
+        loss, logits, targets = self.model_step(batch)
 
         # update and log metrics
-        self.test_loss(loss)
-        self.test_acc(preds, targets)
-        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.test_acc1(logits, targets)
+        self.test_acc5(logits, targets)
+        self.log("test/acc1", self.test_acc1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/acc5", self.test_acc5, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
@@ -213,19 +204,25 @@ class ImageNetLitModule(LightningModule):
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                    "interval": "epoch",
-                    "frequency": 1,
-                },
-            }
-        return {"optimizer": optimizer}
+        main_scheduler = self.hparams.main_scheduler(optimizer=optimizer)
+        if self.hparams.warmup_steps > 0:
+            warmup_scheduler = self.hparams.warmup_scheduler(optimizer=optimizer)
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, main_scheduler],
+                milestones=[self.hparams.warmup_steps]
+            )
+        else:
+            scheduler = main_scheduler
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
 
 
 if __name__ == "__main__":
-    _ = ImageNetLitModule(None, None, None, None)
+    _ = ImageNetModule(None, None, None, None)

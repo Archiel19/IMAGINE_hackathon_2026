@@ -9,6 +9,9 @@ data_dir: ${paths.root_dir}/data/
 # path to logging directory
 log_dir: ${paths.root_dir}/logs/
 
+# path to prediction directory
+prediction_dir: ${paths.root_dir}/predictions/
+
 # path to output directory, created dynamically by hydra
 # path generation pattern is specified in `configs/hydra/default.yaml`
 # use it to store all files generated during the run, like ckpts and metrics
@@ -16,3 +19,7 @@ output_dir: ${hydra:runtime.output_dir}
 
 # path to working directory
 work_dir: ${hydra:runtime.cwd}
+
+# path to codecarbon directory
+codecarbon_dir: ${paths.root_dir}/codecarbon/
+electricity_maps_key: ${paths.codecarbon_dir}electricity_maps_key.txt
