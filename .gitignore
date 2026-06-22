@@ -16,3 +16,7 @@ uv.lock
 data/*
 logs/*
 codecarbon/*
+
+!data/.gitkeep
+!logs/.gitkeep
+!codecarbon/.gitkeep

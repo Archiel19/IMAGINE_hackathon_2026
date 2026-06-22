@@ -51,7 +51,10 @@ Also, to get more accurate carbon emission measurements, CodeCarbon can use the 
 2) Enter your ENPC/uni email and click `Sign up`, then follow the instruction to complete your registration
 3) Scroll down to the `Resources` section > `API Key`
 4) Create a new API key and copy it to your clipboard
-5) Paste the plain API key in [electricity_maps_key.txt](./codecarbon/electricity_maps_key.txt)
+5) Write the plain API key to `./codecarbon/electricity_maps_key.txt`:
+    ```bash
+    echo <your API key> >> ./codecarbon/electricity_maps_key.txt
+    ```
 
 
 ### Experiment Tagging
