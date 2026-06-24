@@ -9,7 +9,7 @@ In this repo, we train a **ViT-S/16** for **image classification** on the **Imag
 
 The goal is to achieve **85% top-5 accuracy** on our test set using as little energy as possible.
 
-Our baseline trains for under 7 hours on a single A6000 GPU, consuming around 2630 watt-hours. The baseline is already partially optimized with mixed precision and model compilation, but we can for sure do better!
+Our baseline trains for under 7 hours with a single A6000 GPU and 64GB of system RAM, consuming around 2630 watt-hours. The baseline is already partially optimized with mixed precision and model compilation, but we can for sure do better!
 
 ### Index
 - [Before you Start](#before-you-start)
@@ -40,6 +40,7 @@ We are going to use the uv package manager, ask your teammates for help with the
 
 Before moving on to the next steps, it is a good idea to get the environment ready:
 ```bash
+uv venv
 uv pip install -r pyproject.toml
 ```
 
@@ -50,12 +51,19 @@ CodeCarbon has an API that we can use to upload all the measurements to their da
 2) Click `Register` at the bottom, fill and submit the form with your ENPC/uni email
 3) Send me (Marta López) your email address on Slack so that I can add you to our organization
 4) On your machine, install and configure CodeCarbon
-    > Note: CodeCarbon will open a browser window when you log in; make sure your terminal supports this (the VSCode terminal is a safe bet)
+
+   **IMPORTANT**: Forward port 8090 either in your IDE or when connecting to your server through SSH: `ssh -L 8090:localhost:8090 <IMAGINE server name>`, then run:
     ```bash
-    uv run codecarbon login  # Will open a browser window to authenticate you
-    uv run codecarbon config  # Select: organization -> IMAGINE; project -> IMAGINE Hackathon 2026; experiment -> Baseline
+    export BROWSER=echo
+    uv run codecarbon login
+    # Open the link in a browser and log in
+    uv run codecarbon config
+    # Select:
+    #    organization -> IMAGINE
+    #    project -> IMAGINE Hackathon 2026
+    #    experiment -> Baseline
     ```
-5) To get CPU power consumption measurements, run:
+6) To get CPU power consumption measurements, run:
     ```bash
     sudo chmod -R a+r /sys/class/powercap/intel-rapl
     ```
