@@ -1,8 +1,8 @@
 
 <div align="center">
 
-# IMAGINE Hackathon 2026
-*How much energy does it really take to train a competent vision model?*
+# 🏴‍☠️ IMAGINE Hackathon 2026
+*⚡ How much energy does it really take to train a competent vision model? ⚡*
 </div>
 
 In this repo, we train a **ViT-S/16** for **image classification** on the **ImageNet-1k** dataset.
@@ -12,20 +12,20 @@ The goal is to achieve **85% top-5 accuracy** on our test set using as little en
 Our baseline trains for under 7 hours with a single A6000 GPU and 64GB of system RAM, consuming around 2630 watt-hours. The baseline is already partially optimized with mixed precision and model compilation, but we can for sure do better!
 
 ### Index
-- [Before you Start](#before-you-start)
+- [⚙️ Before you Start](#️-before-you-start)
     - [Dataset](#dataset)
     - [uv](#uv)
-    - [CodeCarbon](#codecarbon)
-    - [Electricity Maps](#electricity-maps)
     - [Weights & Biases](#weights--biases)
-- [Project Structure](#project-structure)
-- [Defining Experiments](#defining-experiments)
+    - [CodeCarbon](#codecarbon)
+        - [Electricity Maps [Optional]](#electricity-maps-optional)
+- [📁 Project Structure](#-project-structure)
+- [🧪 Defining Experiments](#-defining-experiments)
     - [Experiment Tagging](#experiment-tagging)
     - [Hyperparameter Search](#hyperparameter-search)
-- [Training](#training)
-- [Evaluation](#evaluation)
+- [🚀 Training](#-training)
+- [✅ Evaluation](#-evaluation)
 
-## Before you Start
+## ⚙️ Before you Start
 We need to set up some things before we start training. First clone the repo and `cd` into it, then do the following:
 
 ### Dataset
@@ -42,6 +42,12 @@ Before moving on to the next steps, it is a good idea to get the environment rea
 ```bash
 uv venv
 uv pip install -r pyproject.toml
+```
+
+### Weights & Biases
+Make sure you are logged in to Weights & Biases before launching experiments!
+```bash
+uv run wandb login
 ```
 
 ### CodeCarbon
@@ -68,7 +74,7 @@ CodeCarbon has an API that we can use to upload all the measurements to their da
     sudo chmod -R a+r /sys/class/powercap/intel-rapl
     ```
 
-### Electricity Maps
+#### Electricity Maps [Optional]
 To get more accurate carbon emission measurements, CodeCarbon can use the ElectricityMaps API. For this to work, follow these steps:
 1) Go to https://app.electricitymaps.com/auth/signup
 2) Enter your ENPC/uni email and click `Sign up`, then follow the instruction to complete your registration
@@ -79,13 +85,8 @@ To get more accurate carbon emission measurements, CodeCarbon can use the Electr
     echo <your API key> >> ./electricity_maps_key.txt
     ```
 
-### Weights & Biases
-Make sure you are logged in to Weights & Biases before launching experiments!
-```bash
-uv run wandb login
-```
 
-## Project Structure
+## 📁 Project Structure
 This repo is based on the [Lightning + Hydra template by ashleve](https://github.com/ashleve/lightning-hydra-template).
 
 There are three main components that you can play around with:
@@ -95,24 +96,25 @@ There are three main components that you can play around with:
 
 So you will be working mainly with those three configs, as well as [`experiment`](./configs/experiment/), and maybe [`hparams_search`](./configs/hparams_search) and [`callbacks`](./configs/callbacks/).
 
-## Defining Experiments
+## 🧪 Defining Experiments
 To define a new experiment, create a YAML file under [`configs/experiment`](./configs/experiment).
 
-If needed, override the `module`, `datamodule` or `trainer` configs as done in the [example](configs/experiment/example.yaml) with your own config files defined in the `module`, `datamodule` or `trainer` directories under `./configs`, respectively.
+If needed, override the `module`, `datamodule` or `trainer` configs as done in the [example](configs/experiment/example.yaml) with your own config files defined in the [`module/`](./configs/module/), [`datamodule/`](./configs/datamodule/) or [`trainer/`](./configs/trainer/) directories under [`configs/`](./configs/), respectively.
 
-If needed, you may also define new versions of [`imagenet_datamodule.py`](./src/datamodules/imagenet_datamodule.py) and [`imagenet_module.py`](./src/modules/imagenet_module.py) in the corresponding directories under `src`.
+You may also define new versions of [`imagenet_datamodule.py`](./src/datamodules/imagenet_datamodule.py) and [`imagenet_module.py`](./src/modules/imagenet_module.py) in the corresponding directories under [`src/`](./src/). You can define new network architectures under [`src/modules/nets/`](./src/modules/nets/).
 
 ### Experiment Tagging
-To keep things tidy, please define the following in the [default train config](./configs/train.yaml).
+To keep things tidy, please define the following in the [main train config](./configs/train.yaml):
 - `team_name`: name of your team. Can be a single letter, the team leader's name, or a short name, as long as it is the same for all team members.
-- `experiment_name`: name of the approach you are trying out. The logs are timestamped, so running the same experiment several times will not overwrite previous output.
+- `experiment_name`: name of the approach you are trying out. Experiment logs are timestamped, so running the same experiment several times will not overwrite previous output.
 - `tags`: a *project stage* and a *run type* tag. The available options are:
-    - First tag options: `data`, `explore`, `baseline`, `ablate`, `hyperparam`, `final`, `<custom tag>`
-    - Second tag options: `train`, `pre-train`, `post-train`, `debug`, `<custom tag>`
+    - Project stage options: `data`, `explore`, `baseline`, `ablate`, `hyperparam`, `final`, `<custom tag>`
+    - Run type options: `train`, `pre-train`, `post-train`, `debug`, `<custom tag>`
+
 Adapt `experiment_name` and `tags` as necessary for each experiment.
 
 ### Hyperparameter Search
-You can use the Hydra `--multirun` option to launch a simple, *sequential* grid search as shown in the [documentation](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/). For example:
+You can use the Hydra `--multirun` (or `-m`) option to launch a simple, *sequential* grid search as shown in the [documentation](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/). For example:
 
 ```bash
 uv run src/train.py --multirun datamodule.batch_size=32,64,128 module.optimizer.lr="range(0.01,0.06,0.01)" tags="[hyperparam,train]"
@@ -122,16 +124,18 @@ You can also try Optuna for a smarter hyperparameter search. There is an example
 
 > Don't forget to use the `hyperparam` tag in the tags field of the config!
 
-## Training
+## 🚀 Training
 Run:
 ```bash
 uv run src/train.py
 ```
 with any Hydra command-line overrides that you need for your experiment.
 
-## Evaluation
-Once the test set has been released, complete the [eval config](./configs/eval.yaml) with your selected checkpoints and your team name, then run:
+## ✅ Evaluation
+Once the test set has been released, complete the [eval config](./configs/eval.yaml) with your selected **checkpoints** and your **team name**, then run:
 ```bash
 uv run src/eval.py
 ```
-This will register the output of the model for each image in the test set and upload the results to the evaluation server. We will only reveal the test performance after everyone has submitted their results.
+This will register the output of the model for each image in the test set and upload the results to the evaluation server.
+
+We will reveal the test performance after everyone has submitted their results!

@@ -1,4 +1,5 @@
 import contextlib
+import os
 from typing import List
 
 import hydra
@@ -63,8 +64,12 @@ def instantiate_emissions_tracker(cfg: DictConfig):
         log.warning("No CodeCarbon config found! Skipping...")
         return contextlib.nullcontext()
 
-    with open(cfg.paths.electricity_maps_key) as f:
-        electricitymaps_api_key = f.read().strip()
+    electricitymaps_api_key = None
+    if os.path.isfile(cfg.paths.electricity_maps_key):
+        with open(cfg.paths.electricity_maps_key) as f:
+            electricitymaps_api_key = f.read().strip()
+        log.info("Using Electricity Maps for live carbon intensity tracking")
+
     tracker: EmissionsTracker = hydra.utils.instantiate(
         cfg.codecarbon, electricitymaps_api_token=electricitymaps_api_key
     )
