@@ -24,7 +24,8 @@ Our baseline trains for under 7 hours with a single A6000 GPU and 64GB of system
     - [Hyperparameter Search](#hyperparameter-search)
 - [🚀 Training](#-training)
     - [⚠️ IMPORTANT](#️-important)
-- [✅ Evaluation](#-evaluation)
+- [🔄 Validating](#-validating)
+- [✅ Testing](#-testing)
 
 ## ⚙️ Before you Start
 We need to set up some things before we start training. First clone the repo and `cd` into it, then do the following:
