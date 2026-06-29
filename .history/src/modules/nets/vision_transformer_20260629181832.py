@@ -193,7 +193,6 @@ class Encoder(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
-        keep_rate : list[int] = [1, ],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -203,11 +202,6 @@ class Encoder(nn.Module):
             torch.empty(1, seq_length, hidden_dim).normal_(std=0.02)
         )  # from BERT
         self.dropout = nn.Dropout(dropout)
-
-        # Token Dropout
-        if len(keep_rate) == 1:
-            keep_rate = keep_rate * num_layers
-
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
             layers[f"encoder_layer_{i}"] = EncoderBlock(
@@ -216,7 +210,6 @@ class Encoder(nn.Module):
                 mlp_dim,
                 dropout,
                 attention_dropout,
-                keep_rate,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)

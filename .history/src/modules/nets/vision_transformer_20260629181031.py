@@ -11,7 +11,7 @@ from typing import Any, Callable, NamedTuple, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
-from utils.helpers import complement_idx
+
 
 class ConvStemConfig(NamedTuple):
     out_channels: int
@@ -193,7 +193,6 @@ class Encoder(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
-        keep_rate : list[int] = [1, ],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -203,11 +202,6 @@ class Encoder(nn.Module):
             torch.empty(1, seq_length, hidden_dim).normal_(std=0.02)
         )  # from BERT
         self.dropout = nn.Dropout(dropout)
-
-        # Token Dropout
-        if len(keep_rate) == 1:
-            keep_rate = keep_rate * num_layers
-
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
             layers[f"encoder_layer_{i}"] = EncoderBlock(
@@ -216,7 +210,6 @@ class Encoder(nn.Module):
                 mlp_dim,
                 dropout,
                 attention_dropout,
-                keep_rate,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -240,7 +233,6 @@ class EncoderBlock(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
-        keep_rate: float = 1.0,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -257,10 +249,7 @@ class EncoderBlock(nn.Module):
         self.ln_2 = norm_layer(hidden_dim)
         self.mlp = MLPBlock(hidden_dim, mlp_dim, dropout)
 
-        # Params for token dropping
-        self.keep_rate = keep_rate
-
-    def token_dropping(self, x, attn, tokens=None):
+    def token_dropping(self, x, attn, keep_rate=None, tokens=None):
         """
             Output:
                 index: The indices of the selected tokens
@@ -271,8 +260,8 @@ class EncoderBlock(nn.Module):
         B, N, C = x.shape
 
         left_tokens = N - 1
-        if self.keep_rate < 1 and self.keep_rate < 1 or tokens is not None:  # double check the keep rate
-            left_tokens = math.ceil(self.keep_rate * (N - 1))
+        if self.keep_rate < 1 and keep_rate < 1 or tokens is not None:  # double check the keep rate
+            left_tokens = math.ceil(keep_rate * (N - 1))
             if tokens is not None:
                 left_tokens = tokens
             if left_tokens == N - 1:
@@ -289,23 +278,16 @@ class EncoderBlock(nn.Module):
         return None, None, left_tokens
 
     def aggregate_tokens(self, x, index, idx, cls_attn, left_tokens, fuse_token=False):
-        B, N, C = x.shape
-
         non_cls = x[:, 1:]
         x_others = torch.gather(non_cls, dim=1, index=index) # (B, left_tokens, C)
 
         if fuse_token:
             compl = complement_idx(idx, N - 1) # (B, N-1-left_tokens)
-            non_topk = torch.gather(non_cls, dim=1, index=compl.unsqueeze(-1).expand(-1, -1, C)) # (B, N-1-left_tokens, C)
+            compl = torch.gather(non_cls, dim=1, index=compl.unsqueeze(-1).expand(-1, -1, C)) # (B, N-1-left_tokens, C)
 
-            non_topk_attn = torch.gather(cls_attn, dim=1, index=compl)  # [B, N-1-left_tokens]
-            extra_token = torch.sum(non_topk * non_topk_attn.unsqueeze(-1), dim=1, keepdim=True)  # [B, 1, C]
-            x = torch.cat([x[:, 0:1], x_others, extra_token], dim=1)
 
-        else:
-            x = torch.cat([x[:, 0:1], x_others], dim=1)
+        pass
 
-        return x
 
     def forward(self, input: torch.Tensor):
         torch._assert(
@@ -314,7 +296,6 @@ class EncoderBlock(nn.Module):
         x = self.ln_1(input)
         x, attn = self.self_attention(x, x, x, need_weights=False)
         index, idx, left_tokens = self.token_dropping(x, attn)
-        x = self.aggregate_tokens(x, index, idx, attn, left_tokens, fuse_token=False)
         x = self.dropout(x)
         x = x + input
 
