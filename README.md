@@ -48,7 +48,7 @@ Then extract the contents and locate `Data/CLS-LOC/train`. Place it under `data/
 ### uv
 We are going to use the [uv package manager](https://docs.astral.sh/uv/). To install it, run:
 ```bash
-curl -LsSf astral-sh.uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 or if you don't have `curl`:
 ```bash
