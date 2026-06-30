@@ -16,3 +16,4 @@ auto_augment_policy: 'ra'
 ra_magnitude: 10
 cutmix_alpha: 0.0
 mixup_alpha: 0.2
+skip_resize_crop: false

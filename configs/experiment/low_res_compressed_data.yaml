@@ -1,0 +1,29 @@
+# @package _global_
+
+# to execute this experiment run:
+# uv run src/train.py experiment=low_res_compressed_data
+
+defaults:
+  - override /trainer: imagenet_vit_s_16
+  - override /callbacks: default
+
+seed: 42
+
+data:
+  resize_size: 112
+  crop_size: 96
+  jpeg_quality: 50
+  overwrite: true # false = if resized/compressed data already exists, use it, true = overwrite it
+  # (use true to accurately measure energy usage!)
+  switch_epoch: 17
+
+datamodule:
+  skip_resize_crop: true
+
+callbacks:
+  compressed_data_phase_switch:
+    _target_: src.callbacks.compressed_data_phase_switch.CompressedDataPhaseSwitchCallback
+    switch_epoch: ${data.switch_epoch}
+
+experiment_name: "low_res_compressed_2_compressed"
+tags: ["data", "train"]

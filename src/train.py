@@ -41,6 +41,7 @@ from src.utils import (
     log_hyperparameters,
     task_wrapper,
 )
+from src.utils.compressed_data import apply_compressed_data_config, prepare_compressed_datasets
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
@@ -63,52 +64,59 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
-    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
-
-    if "CosineAnnealingLR" in cfg.module["main_scheduler"]["_target_"]:
-        datamodule.setup(stage="fit")  # Load training set
-        bsize = cfg.datamodule.batch_size
-        steps_per_epoch = math.ceil(len(datamodule.data_train) / bsize)
-        cfg.module.main_scheduler.T_max = (
-            cfg.trainer.max_epochs * steps_per_epoch - cfg.module.warmup_steps
-        )
-
-    log.info(f"Instantiating module <{cfg.module._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.module)
-
-    log.info("Instantiating loggers...")
-    logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
-
-    log.info("Instantiating callbacks...")
-    callback_dict: Dict[str, Callback] = instantiate_callbacks(cfg.get("callbacks"))
-    callbacks: List[Callback] = list(callback_dict.values())
-
-    log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
-
     if "codecarbon" in cfg:
         log.info("Instantiating CodeCarbon tracker...")
         tracker: EmissionsTracker = instantiate_emissions_tracker(cfg)
     else:
         tracker = contextlib.nullcontext()
 
-    object_dict = {
-        "cfg": cfg,
-        "datamodule": datamodule,
-        "model": model,
-        "callbacks": callbacks,
-        "logger": logger,
-        "trainer": trainer,
-        "tracker": tracker,
-    }
+    callback_dict: Dict[str, Callback] = {}
+    trainer: Optional[Trainer] = None
 
-    if logger:
-        log.info("Logging hyperparameters!")
-        log_hyperparameters(object_dict)
-
-    log.info("Starting training!")
     with tracker, sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        if cfg.get("data"):
+            apply_compressed_data_config(cfg)
+            prepare_compressed_datasets(cfg)
+
+        log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
+        datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
+
+        if "CosineAnnealingLR" in cfg.module["main_scheduler"]["_target_"]:
+            datamodule.setup(stage="fit")  # Load training set
+            bsize = cfg.datamodule.batch_size
+            steps_per_epoch = math.ceil(len(datamodule.data_train) / bsize)
+            cfg.module.main_scheduler.T_max = (
+                cfg.trainer.max_epochs * steps_per_epoch - cfg.module.warmup_steps
+            )
+
+        log.info(f"Instantiating module <{cfg.module._target_}>")
+        model: LightningModule = hydra.utils.instantiate(cfg.module)
+
+        log.info("Instantiating loggers...")
+        logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
+
+        log.info("Instantiating callbacks...")
+        callback_dict: Dict[str, Callback] = instantiate_callbacks(cfg.get("callbacks"))
+        callbacks: List[Callback] = list(callback_dict.values())
+
+        log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
+        trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
+
+        object_dict = {
+            "cfg": cfg,
+            "datamodule": datamodule,
+            "model": model,
+            "callbacks": callbacks,
+            "logger": logger,
+            "trainer": trainer,
+            "tracker": tracker,
+        }
+
+        if logger:
+            log.info("Logging hyperparameters!")
+            log_hyperparameters(object_dict)
+
+        log.info("Starting training!")
         # Note: Flash Attention only works with mixed precision, otherwise you will see:
         #   RuntimeError('No available kernel. Aborting execution.')
         # when calling `scaled_dot_product_attention`
@@ -127,7 +135,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         if early_stopping_cb.stopping_reason_message:
             print(f"Details: {early_stopping_cb.stopping_reason_message}")
 
-    metric_dict = trainer.callback_metrics
+    metric_dict = trainer.callback_metrics if trainer is not None else {}
 
     return metric_dict, object_dict
 

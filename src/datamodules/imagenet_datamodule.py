@@ -89,6 +89,10 @@ class ImageNetDataModule(LightningDataModule):
         cutmix_alpha: float = 0.0,
         mixup_alpha: float = 0.0,
         random_erase_prob: float = 0.0,
+        skip_resize_crop: bool = False,
+        phase2_train_dir: Optional[str] = None,
+        phase2_val_dir: Optional[str] = None,
+        switch_epoch: Optional[int] = None,
         batch_size: int = 64,
         num_workers: int = 4,
         prefetch_factor: int = 2,
@@ -111,6 +115,11 @@ class ImageNetDataModule(LightningDataModule):
         :param cutmix_alpha: The alpha value for CutMix augmentation. Defaults to `0.0` (no CutMix).
         :param mixup_alpha: The alpha value for MixUp augmentation. Defaults to `0.0` (no MixUp).
         :param random_erase_prob: The probability of applying random erasing during training. Defaults to `0.0`.
+        :param skip_resize_crop: Skip resize and crop transforms. Use with datasets that were
+            preprocessed offline (e.g. via ``compress_imagenet.py``). Defaults to `False`.
+        :param phase2_train_dir: Training directory for phase 2 (JPEG-only). Defaults to `None`.
+        :param phase2_val_dir: Validation directory for phase 2 (JPEG-only). Defaults to `None`.
+        :param switch_epoch: Epoch (0-based) at which to switch to phase 2. Defaults to `None`.
         :param batch_size: The batch size. Defaults to `64`.
         :param num_workers: The number of workers. Defaults to `0`.
         :param prefetch_factor: The number of batches to prefetch. Defaults to `2`.
@@ -122,56 +131,14 @@ class ImageNetDataModule(LightningDataModule):
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
 
-        # data transformations
-        interpolation_mode = T.InterpolationMode(interpolation)
-        imagenet_mean = (0.485, 0.456, 0.406)
-        imagenet_std = (0.229, 0.224, 0.225)
-        train_transforms = []
-        train_transforms.append(
-            T.RandomResizedCrop(train_crop_size, interpolation=interpolation_mode)
-        )
-        if hflip_prob > 0:
-            train_transforms.append(T.RandomHorizontalFlip(hflip_prob))
+        self._interpolation_mode = T.InterpolationMode(interpolation)
+        self._imagenet_mean = (0.485, 0.456, 0.406)
+        self._imagenet_std = (0.229, 0.224, 0.225)
+        self._skip_resize_crop = skip_resize_crop
+        self.current_phase = 1
 
-        if auto_augment_policy is not None:
-            if auto_augment_policy == "ra":
-                train_transforms.append(
-                    T.RandAugment(interpolation=interpolation_mode, magnitude=ra_magnitude)
-                )
-            elif auto_augment_policy == "ta_wide":
-                train_transforms.append(T.TrivialAugmentWide(interpolation=interpolation_mode))
-            elif auto_augment_policy == "augmix":
-                train_transforms.append(
-                    T.AugMix(interpolation=interpolation_mode, severity=augmix_severity)
-                )
-            else:
-                aa_policy = T.AutoAugmentPolicy(auto_augment_policy)
-                train_transforms.append(
-                    T.AutoAugment(policy=aa_policy, interpolation=interpolation_mode)
-                )
-
-        train_transforms.extend(
-            [
-                T.PILToTensor(),
-                T.ToDtype(torch.float, scale=True),
-                T.Normalize(mean=imagenet_mean, std=imagenet_std),
-            ]
-        )
-        if random_erase_prob > 0:
-            train_transforms.append(T.RandomErasing(p=random_erase_prob))
-        train_transforms.append(T.ToPureTensor())
-        self.train_transforms = T.Compose(train_transforms)
-
-        self.eval_transforms = T.Compose(
-            [
-                T.Resize(eval_resize_size, interpolation=interpolation_mode),
-                T.CenterCrop(eval_crop_size),
-                T.PILToTensor(),
-                T.ToDtype(torch.float, scale=True),
-                T.Normalize(mean=imagenet_mean, std=imagenet_std),
-                T.ToPureTensor(),
-            ]
-        )
+        self.train_transforms = self._build_train_transforms(skip_resize_crop)
+        self.eval_transforms = self._build_eval_transforms(skip_resize_crop)
 
         if cutmix_alpha or mixup_alpha:
             mixup_cutmix = self._get_mixup_cutmix(
@@ -187,6 +154,103 @@ class ImageNetDataModule(LightningDataModule):
         self.data_test: Optional[Dataset] = None
 
         self.batch_size_per_device = batch_size
+
+    def _build_train_transforms(self, skip_resize_crop: bool) -> T.Compose:
+        train_transforms = []
+        if not skip_resize_crop:
+            train_transforms.append(
+                T.RandomResizedCrop(
+                    self.hparams.train_crop_size,
+                    interpolation=self._interpolation_mode,
+                )
+            )
+        if self.hparams.hflip_prob > 0:
+            train_transforms.append(T.RandomHorizontalFlip(self.hparams.hflip_prob))
+
+        auto_augment_policy = self.hparams.auto_augment_policy
+        if auto_augment_policy is not None:
+            if auto_augment_policy == "ra":
+                train_transforms.append(
+                    T.RandAugment(
+                        interpolation=self._interpolation_mode,
+                        magnitude=self.hparams.ra_magnitude,
+                    )
+                )
+            elif auto_augment_policy == "ta_wide":
+                train_transforms.append(
+                    T.TrivialAugmentWide(interpolation=self._interpolation_mode)
+                )
+            elif auto_augment_policy == "augmix":
+                train_transforms.append(
+                    T.AugMix(
+                        interpolation=self._interpolation_mode,
+                        severity=self.hparams.augmix_severity,
+                    )
+                )
+            else:
+                aa_policy = T.AutoAugmentPolicy(auto_augment_policy)
+                train_transforms.append(
+                    T.AutoAugment(
+                        policy=aa_policy, interpolation=self._interpolation_mode
+                    )
+                )
+
+        train_transforms.extend(
+            [
+                T.PILToTensor(),
+                T.ToDtype(torch.float, scale=True),
+                T.Normalize(mean=self._imagenet_mean, std=self._imagenet_std),
+            ]
+        )
+        if self.hparams.random_erase_prob > 0:
+            train_transforms.append(T.RandomErasing(p=self.hparams.random_erase_prob))
+        train_transforms.append(T.ToPureTensor())
+        return T.Compose(train_transforms)
+
+    def _build_eval_transforms(self, skip_resize_crop: bool) -> T.Compose:
+        eval_transforms = []
+        if not skip_resize_crop:
+            eval_transforms.extend(
+                [
+                    T.Resize(self.hparams.eval_resize_size, interpolation=self._interpolation_mode),
+                    T.CenterCrop(self.hparams.eval_crop_size),
+                ]
+            )
+        eval_transforms.extend(
+            [
+                T.PILToTensor(),
+                T.ToDtype(torch.float, scale=True),
+                T.Normalize(mean=self._imagenet_mean, std=self._imagenet_std),
+                T.ToPureTensor(),
+            ]
+        )
+        return T.Compose(eval_transforms)
+
+    def switch_to_phase_2(self) -> None:
+        """Switch to JPEG-only datasets with online resize/crop transforms."""
+        if self.hparams.phase2_train_dir is None or self.hparams.phase2_val_dir is None:
+            raise RuntimeError("phase2_train_dir and phase2_val_dir must be set to switch phases.")
+
+        self.hparams.train_dir = self.hparams.phase2_train_dir
+        self.hparams.val_dir = self.hparams.phase2_val_dir
+        self._skip_resize_crop = False
+        self.current_phase = 2
+
+        self.train_transforms = self._build_train_transforms(skip_resize_crop=False)
+        self.eval_transforms = self._build_eval_transforms(skip_resize_crop=False)
+
+        train_path = os.path.join(self.hparams.data_path, self.hparams.train_dir)
+        val_path = os.path.join(self.hparams.data_path, self.hparams.val_dir)
+        self.data_train = ImageFolder(train_path, transform=self.train_transforms)
+        self.data_val = ImageFolder(val_path, transform=self.eval_transforms)
+
+    def maybe_switch_for_epoch(self, epoch: int) -> bool:
+        """Switch to phase 2 when ``epoch >= switch_epoch``. Returns True if switched."""
+        switch_epoch = self.hparams.get("switch_epoch")
+        if switch_epoch is None or epoch < switch_epoch or self.current_phase >= 2:
+            return False
+        self.switch_to_phase_2()
+        return True
 
     @property
     def num_classes(self) -> int:
