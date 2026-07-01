@@ -16,12 +16,10 @@ seed: 42
 data:
   resize_size: 112
   crop_size: 96
-  jpeg_quality: 50 
-  overwrite: true # false = if resized/compressed data already exists, use it, true = overwrite it
+  jpeg_quality: 50
+  overwrite: false # false = if resized/compressed data already exists, use it, true = overwrite it
   # (use true to accurately measure energy usage!)
   switch_epoch: 17 # Switch to phase 2 at this epoch
-  phase2_num_workers: 8
-  phase2_prefetch_factor: 2
 
 datamodule:
   skip_resize_crop: true
@@ -32,5 +30,5 @@ callbacks:
     switch_epoch: ${data.switch_epoch}
 # ------------------------------------------------------------
 
-experiment_name: "low_res_compressed_2_compressed"
+experiment_name: "low_res_compressed_2_compressed_hotfix"
 tags: ["data", "train"]
