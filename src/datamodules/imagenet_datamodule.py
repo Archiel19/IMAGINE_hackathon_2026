@@ -93,6 +93,8 @@ class ImageNetDataModule(LightningDataModule):
         phase2_train_dir: Optional[str] = None,
         phase2_val_dir: Optional[str] = None,
         switch_epoch: Optional[int] = None,
+        phase2_num_workers: Optional[int] = None,
+        phase2_prefetch_factor: Optional[int] = None,
         batch_size: int = 64,
         num_workers: int = 4,
         prefetch_factor: int = 2,
@@ -154,6 +156,19 @@ class ImageNetDataModule(LightningDataModule):
         self.data_test: Optional[Dataset] = None
 
         self.batch_size_per_device = batch_size
+        self._num_workers = num_workers
+        self._prefetch_factor = prefetch_factor
+
+    def _make_dataloader(self, dataset: Dataset, shuffle: bool) -> DataLoader[Any]:
+        return DataLoader(
+            dataset=dataset,
+            batch_size=self.batch_size_per_device,
+            num_workers=self._num_workers,
+            pin_memory=self.hparams.pin_memory,
+            prefetch_factor=self._prefetch_factor if self._num_workers > 0 else None,
+            collate_fn=self.collate_fn,
+            shuffle=shuffle,
+        )
 
     def _build_train_transforms(self, skip_resize_crop: bool) -> T.Compose:
         train_transforms = []
@@ -226,10 +241,21 @@ class ImageNetDataModule(LightningDataModule):
         )
         return T.Compose(eval_transforms)
 
+    def _release_phase_1_resources(self) -> None:
+        """Drop phase-1 datasets and transforms after dataloaders no longer reference them."""
+        self.data_train = None
+        self.data_val = None
+        self.train_transforms = None
+        self.eval_transforms = None
+
     def switch_to_phase_2(self) -> None:
         """Switch to JPEG-only datasets with online resize/crop transforms."""
         if self.hparams.phase2_train_dir is None or self.hparams.phase2_val_dir is None:
             raise RuntimeError("phase2_train_dir and phase2_val_dir must be set to switch phases.")
+        if self.current_phase >= 2:
+            return
+
+        self._release_phase_1_resources()
 
         self.hparams.train_dir = self.hparams.phase2_train_dir
         self.hparams.val_dir = self.hparams.phase2_val_dir
@@ -243,6 +269,11 @@ class ImageNetDataModule(LightningDataModule):
         val_path = os.path.join(self.hparams.data_path, self.hparams.val_dir)
         self.data_train = ImageFolder(train_path, transform=self.train_transforms)
         self.data_val = ImageFolder(val_path, transform=self.eval_transforms)
+
+        if self.hparams.phase2_num_workers is not None:
+            self._num_workers = self.hparams.phase2_num_workers
+        if self.hparams.phase2_prefetch_factor is not None:
+            self._prefetch_factor = self.hparams.phase2_prefetch_factor
 
     def maybe_switch_for_epoch(self, epoch: int) -> bool:
         """Switch to phase 2 when ``epoch >= switch_epoch``. Returns True if switched."""
@@ -304,43 +335,21 @@ class ImageNetDataModule(LightningDataModule):
 
         :return: The train dataloader.
         """
-        return DataLoader(
-            dataset=self.data_train,
-            batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
-            collate_fn=self.collate_fn,
-            shuffle=True,
-        )
+        return self._make_dataloader(self.data_train, shuffle=True)
 
     def val_dataloader(self) -> DataLoader[Any]:
         """Create and return the validation dataloader.
 
         :return: The validation dataloader.
         """
-        return DataLoader(
-            dataset=self.data_val,
-            batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
-            shuffle=False,
-        )
+        return self._make_dataloader(self.data_val, shuffle=False)
 
     def test_dataloader(self) -> DataLoader[Any]:
         """Create and return the test dataloader.
 
         :return: The test dataloader.
         """
-        return DataLoader(
-            dataset=self.data_test,
-            batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
-            shuffle=False,
-        )
+        return self._make_dataloader(self.data_test, shuffle=False)
 
     def predict_dataloader(self) -> DataLoader[Any]:
         """Create and return the predict dataloader.

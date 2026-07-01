@@ -6,6 +6,7 @@ import hydra
 import lightning as L
 import rootutils
 import torch
+import torch.multiprocessing
 from codecarbon import EmissionsTracker
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason
@@ -48,6 +49,8 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 # Uses TensorFloat32 or bfloat16 for matrix multiplication when available
 torch.set_float32_matmul_precision("high")
+# Avoid /dev/shm exhaustion when workers transfer large phase-2 batches
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 @task_wrapper

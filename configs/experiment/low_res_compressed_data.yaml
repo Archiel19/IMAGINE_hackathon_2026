@@ -9,13 +9,19 @@ defaults:
 
 seed: 42
 
+# Put those parameters in your experiment config
+# 1st phase: Dataset is resized + center cropped to 96x96 + JPEG compressed to 50 quality (w/o Resize/Crop augmentations)
+# 2nd phase: Dataset is JPEG compressed to 50 quality (w/ Resize/Crop augmentations)
+# ------------------------------------------------------------
 data:
   resize_size: 112
   crop_size: 96
-  jpeg_quality: 50
+  jpeg_quality: 50 
   overwrite: true # false = if resized/compressed data already exists, use it, true = overwrite it
   # (use true to accurately measure energy usage!)
-  switch_epoch: 17
+  switch_epoch: 17 # Switch to phase 2 at this epoch
+  phase2_num_workers: 8
+  phase2_prefetch_factor: 2
 
 datamodule:
   skip_resize_crop: true
@@ -24,6 +30,7 @@ callbacks:
   compressed_data_phase_switch:
     _target_: src.callbacks.compressed_data_phase_switch.CompressedDataPhaseSwitchCallback
     switch_epoch: ${data.switch_epoch}
+# ------------------------------------------------------------
 
 experiment_name: "low_res_compressed_2_compressed"
 tags: ["data", "train"]

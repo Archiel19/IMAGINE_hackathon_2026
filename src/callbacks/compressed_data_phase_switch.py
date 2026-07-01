@@ -1,29 +1,58 @@
+import gc
+
+import torch
 from lightning import Callback, Trainer
 from lightning.pytorch.utilities import rank_zero_only
+from lightning.pytorch.utilities.combined_loader import _shutdown_workers_and_reset_iterator
 
 from src.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 
-def _invalidate_dataloaders(trainer: Trainer) -> None:
-    """Teardown active loaders so the next epoch creates fresh ones.
+def _shutdown_dataloader(dataloader) -> None:
+    """Shut down DataLoader worker processes."""
+    if dataloader is None:
+        return
+    _shutdown_workers_and_reset_iterator(dataloader)
 
-    Lightning calls ``setup_data()`` before ``on_train_epoch_start``, so switching
-    datasets inside ``on_train_epoch_start`` and calling ``setup_data()`` again leaves
-    orphaned worker processes from the first loader and can hang or crash silently.
-    """
+
+def _release_combined_loader(combined_loader) -> None:
+    if combined_loader is None:
+        return
+    combined_loader.reset()
+    for dataloader in list(combined_loader.flattened):
+        _shutdown_dataloader(dataloader)
+
+
+def _invalidate_dataloaders(trainer: Trainer) -> None:
+    """Teardown Lightning loaders and drop phase-1 dataloader/dataset references."""
     fit_loop = trainer.fit_loop
+
     if fit_loop._data_fetcher is not None:
+        if getattr(fit_loop._data_fetcher, "_combined_loader", None) is not None:
+            _release_combined_loader(fit_loop._data_fetcher._combined_loader)
+            fit_loop._data_fetcher._combined_loader = None
         fit_loop._data_fetcher.teardown()
         fit_loop._data_fetcher = None
+
+    _release_combined_loader(fit_loop._combined_loader)
     fit_loop._combined_loader = None
 
     val_loop = fit_loop.epoch_loop.val_loop
     if val_loop._data_fetcher is not None:
+        if getattr(val_loop._data_fetcher, "_combined_loader", None) is not None:
+            _release_combined_loader(val_loop._data_fetcher._combined_loader)
+            val_loop._data_fetcher._combined_loader = None
         val_loop._data_fetcher.teardown()
         val_loop._data_fetcher = None
+
+    _release_combined_loader(val_loop._combined_loader)
     val_loop._combined_loader = None
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 class CompressedDataPhaseSwitchCallback(Callback):
@@ -43,9 +72,17 @@ class CompressedDataPhaseSwitchCallback(Callback):
 
         old_train = datamodule.hparams.train_dir
         old_val = datamodule.hparams.val_dir
-        datamodule.switch_to_phase_2()
+        old_workers = datamodule._num_workers
+
         _invalidate_dataloaders(trainer)
-        self._log_switch(completed_epoch, old_train, old_val, datamodule)
+        datamodule.switch_to_phase_2()
+        self._log_switch(
+            completed_epoch,
+            old_train,
+            old_val,
+            datamodule,
+            old_workers,
+        )
 
     def on_fit_start(self, trainer: Trainer, pl_module) -> None:
         if trainer.current_epoch >= self.switch_epoch:
@@ -62,11 +99,13 @@ class CompressedDataPhaseSwitchCallback(Callback):
         old_train: str,
         old_val: str,
         datamodule,
+        old_workers: int,
     ) -> None:
         msg = (
             f"Switching to phase 2 (JPEG-only) after epoch {completed_epoch}: "
             f"train {old_train} -> {datamodule.hparams.train_dir}, "
-            f"val {old_val} -> {datamodule.hparams.val_dir} "
+            f"val {old_val} -> {datamodule.hparams.val_dir}, "
+            f"num_workers {old_workers} -> {datamodule._num_workers} "
             f"(online resize/crop enabled from epoch {completed_epoch + 1})"
         )
         log.info(msg)

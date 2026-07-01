@@ -31,15 +31,18 @@ def apply_compressed_data_config(cfg: DictConfig) -> None:
         cfg.datamodule.phase2_train_dir = phase2_train
         cfg.datamodule.phase2_val_dir = phase2_val
         cfg.datamodule.switch_epoch = data_cfg.switch_epoch
+        cfg.datamodule.phase2_num_workers = data_cfg.get("phase2_num_workers", 8)
+        cfg.datamodule.phase2_prefetch_factor = data_cfg.get("phase2_prefetch_factor", 2)
 
     log.info(
         "Compressed data config: phase 1 train=%s, val=%s; phase 2 train=%s, val=%s; "
-        "switch_epoch=%s",
+        "switch_epoch=%s; phase2 num_workers=%s",
         phase1_train,
         phase1_val,
         phase2_train,
         phase2_val,
         data_cfg.switch_epoch,
+        cfg.datamodule.phase2_num_workers,
     )
 
 
