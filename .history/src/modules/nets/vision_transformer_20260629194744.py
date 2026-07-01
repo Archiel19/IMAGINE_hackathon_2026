@@ -84,7 +84,7 @@ class VisionTransformer(nn.Module):
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         seq_length += 1
 
-        keep_rate = [0.75]
+        keep_rate = [0.7]
 
         self.encoder = Encoder(
             seq_length,
@@ -213,9 +213,6 @@ class Encoder(nn.Module):
 
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
-            if i < 2:
-                keep_rate[i] = 1.0
-
             layers[f"encoder_layer_{i}"] = EncoderBlock(
                 num_heads,
                 hidden_dim,
@@ -285,40 +282,15 @@ class EncoderBlock(nn.Module):
                 return None, None, None, left_tokens
             assert left_tokens >= 1
 
-            cls_attn = attn[:, 0, 1:] # (H, N-1)
-            #print(f"cls_attn shape: {cls_attn.shape}")
-
-            
-
-            """
-
-            cls_attn = cls_attn.squeeze(1) # (H, N-1)
+            cls_attn = attn[:, 0:1, 1:] # (B, H, N-1)
+            print(f"cls_attn shape: {cls_attn.shape}")
             # NOTE: Not sure ab the next line !!!!
             # if cls_attn.ndim == 1:
             #     cls_attn = cls_attn.unsqueeze(0)
 
             cls_attn = cls_attn.mean(dim=-1) # (B, N-1)
-            _, idx = torch.topk(cls_attn, k=left_tokens, dim=-1, largest=True, sorted=True) # (B, left_tokens)
-            #index = idx.unsqueeze(-1).expand(-1, -1, C) # (B, left_tokens, C)
-            #idx_3d = idx.unsqueeze(1)
-            # This changes [512, 1, 138] -> [512, 138] safely
-            idx_2d = idx.squeeze(1) if idx.ndim == 3 else idx
-            idx_3d = idx_2d.unsqueeze(-1)
-
-            index = idx_3d.expand(B, left_tokens, C)
-            """
-
-            B, N_spatial = cls_attn.shape # B=512, N_spatial=196
-            C = x.shape[-1]
-
-            # 2. Extract top-k indices from the spatial attention matrix
-            _, idx = torch.topk(cls_attn, k=left_tokens, dim=-1, largest=True, sorted=True) # [B, left_tokens]
-
-            # 3. Create the 3D index map using explicit view tracking (Dynamo friendly)
-            # This eliminates view/unsqueeze shape orientation confusion entirely
-            index = idx.view(B, left_tokens, 1).expand(B, left_tokens, C) # [512, 138, 384]
-
-
+            _, idx = torch.topk(cls_attn, k=left_tokens, dim=1, largest=True, sorted=True) # (B, left_tokens)
+            index = idx.unsqueeze(-1).expand(-1, -1, C) # (B, left_tokens, C)
 
             return cls_attn, index, idx, left_tokens
 
@@ -330,7 +302,6 @@ class EncoderBlock(nn.Module):
         non_cls = x[:, 1:]
         x_others = torch.gather(non_cls, dim=1, index=index) # (B, left_tokens, C)
 
-
         if fuse_token:
             compl = complement_idx(idx, N - 1) # (B, N-1-left_tokens)
             non_topk = torch.gather(non_cls, dim=1, index=compl.unsqueeze(-1).expand(-1, -1, C)) # (B, N-1-left_tokens, C)
@@ -340,11 +311,10 @@ class EncoderBlock(nn.Module):
             x = torch.cat([x[:, 0:1], x_others, extra_token], dim=1)
 
         else:
-            x = torch.cat([x[:, 0:1], x_others], dim=1) # [512, 1, 384] + [512, 138, 384]
+            x = torch.cat([x[:, 0:1], x_others], dim=1)
 
         return x
 
-    
     def forward(self, input: torch.Tensor):
         torch._assert(
             input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}"
@@ -353,32 +323,10 @@ class EncoderBlock(nn.Module):
         x, attn = self.self_attention(x, x, x, need_weights=True)
         
         cls_attn, index, idx, left_tokens = self.token_dropping(x, attn)
-
-        
         if index is not None:
             x = self.aggregate_tokens(x, index, idx, cls_attn, left_tokens, fuse_token=False)
-        
-        
-
         x = self.dropout(x)
-
-        if index is not None:
-            # Extract the CLS token from the original input
-            res_cls = input[:, 0:1]                      # Shape: [512, 1, 384]
-            
-            # Gather the matching spatial patches from the original input
-            res_spatial = torch.gather(input[:, 1:], dim=1, index=index)  # Shape: [512, 138, 384]
-            
-            # Reconstruct the matching identity connection
-            pruned_input = torch.cat([res_cls, res_spatial], dim=1)       # Shape: [512, 139, 384]
-            
-            # 3. Safe residual addition
-            x = x + pruned_input
-
-
-        #breakpoint()
-
-        #x = x + input
+        x = x + input
 
         y = self.ln_2(x)
         y = self.mlp(y)

@@ -84,7 +84,7 @@ class VisionTransformer(nn.Module):
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         seq_length += 1
 
-        keep_rate = [0.75]
+        keep_rate = [0.7]
 
         self.encoder = Encoder(
             seq_length,
@@ -213,9 +213,6 @@ class Encoder(nn.Module):
 
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
-            if i < 2:
-                keep_rate[i] = 1.0
-
             layers[f"encoder_layer_{i}"] = EncoderBlock(
                 num_heads,
                 hidden_dim,
@@ -286,7 +283,7 @@ class EncoderBlock(nn.Module):
             assert left_tokens >= 1
 
             cls_attn = attn[:, 0, 1:] # (H, N-1)
-            #print(f"cls_attn shape: {cls_attn.shape}")
+            print(f"cls_attn shape: {cls_attn.shape}")
 
             
 
@@ -318,6 +315,8 @@ class EncoderBlock(nn.Module):
             # This eliminates view/unsqueeze shape orientation confusion entirely
             index = idx.view(B, left_tokens, 1).expand(B, left_tokens, C) # [512, 138, 384]
 
+            # 4. Gather surviving tokens and build the sequence
+            x = self.aggregate_tokens(x, index, idx, cls_attn, left_tokens, fuse_token=False)
 
 
             return cls_attn, index, idx, left_tokens
@@ -330,6 +329,7 @@ class EncoderBlock(nn.Module):
         non_cls = x[:, 1:]
         x_others = torch.gather(non_cls, dim=1, index=index) # (B, left_tokens, C)
 
+        breakpoint()
 
         if fuse_token:
             compl = complement_idx(idx, N - 1) # (B, N-1-left_tokens)
@@ -362,23 +362,8 @@ class EncoderBlock(nn.Module):
 
         x = self.dropout(x)
 
-        if index is not None:
-            # Extract the CLS token from the original input
-            res_cls = input[:, 0:1]                      # Shape: [512, 1, 384]
-            
-            # Gather the matching spatial patches from the original input
-            res_spatial = torch.gather(input[:, 1:], dim=1, index=index)  # Shape: [512, 138, 384]
-            
-            # Reconstruct the matching identity connection
-            pruned_input = torch.cat([res_cls, res_spatial], dim=1)       # Shape: [512, 139, 384]
-            
-            # 3. Safe residual addition
-            x = x + pruned_input
-
-
-        #breakpoint()
-
-        #x = x + input
+        
+        x = x + input
 
         y = self.ln_2(x)
         y = self.mlp(y)

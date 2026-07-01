@@ -84,7 +84,7 @@ class VisionTransformer(nn.Module):
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         seq_length += 1
 
-        keep_rate = [0.75]
+        keep_rate = [0.7]
 
         self.encoder = Encoder(
             seq_length,
@@ -213,9 +213,6 @@ class Encoder(nn.Module):
 
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
-            if i < 2:
-                keep_rate[i] = 1.0
-
             layers[f"encoder_layer_{i}"] = EncoderBlock(
                 num_heads,
                 hidden_dim,
@@ -286,7 +283,7 @@ class EncoderBlock(nn.Module):
             assert left_tokens >= 1
 
             cls_attn = attn[:, 0, 1:] # (H, N-1)
-            #print(f"cls_attn shape: {cls_attn.shape}")
+            print(f"cls_attn shape: {cls_attn.shape}")
 
             
 
