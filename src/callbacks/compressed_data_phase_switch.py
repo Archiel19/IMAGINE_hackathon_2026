@@ -72,7 +72,7 @@ class CompressedDataPhaseSwitchCallback(Callback):
 
         old_train = datamodule.hparams.train_dir
         old_val = datamodule.hparams.val_dir
-        old_workers = datamodule._num_workers
+        old_workers = datamodule.hparams.num_workers_train
 
         _invalidate_dataloaders(trainer)
         datamodule.switch_to_phase_2()
@@ -105,7 +105,7 @@ class CompressedDataPhaseSwitchCallback(Callback):
             f"Switching to phase 2 (JPEG-only) after epoch {completed_epoch}: "
             f"train {old_train} -> {datamodule.hparams.train_dir}, "
             f"val {old_val} -> {datamodule.hparams.val_dir}, "
-            f"num_workers {old_workers} -> {datamodule._num_workers} "
+            f"num_workers {old_workers} -> {datamodule.hparams.num_workers_train} "
             f"(online resize/crop enabled from epoch {completed_epoch + 1})"
         )
         log.info(msg)
