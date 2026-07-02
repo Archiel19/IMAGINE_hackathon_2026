@@ -1,0 +1,17 @@
+# Two-phase compressed dataset training.
+# When enable=false, training uses the standard ImageNet datamodule settings.
+enable: false
+
+# Phase 1: resized + center cropped + JPEG compressed (no Resize/Crop augmentations)
+# Phase 2: JPEG compressed only (with Resize/Crop augmentations)
+resize_size: 124
+crop_size: 112
+jpeg_quality: 75
+overwrite: false # false = reuse existing compressed data; true = reprocess all images
+switch_epoch: 17 # switch to phase 2 at this epoch (0-based)
+disable_mixup_cutmix: true # disable CutMix and MixUp during compressed-data training
+skip_resize_crop: true # phase 1 only; phase 2 re-enables online resize/crop
+
+phase_switch_callback:
+  _target_: src.callbacks.compressed_data_phase_switch.CompressedDataPhaseSwitchCallback
+  switch_epoch: ${data.switch_epoch}

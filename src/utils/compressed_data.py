@@ -1,6 +1,9 @@
 from pathlib import Path
+from typing import Optional
 
-from omegaconf import DictConfig, OmegaConf, open_dict
+import hydra
+from lightning import Callback
+from omegaconf import DictConfig, open_dict
 
 from compress_imagenet import (
     compressed_datasets_exist,
@@ -11,6 +14,16 @@ from compress_imagenet import (
 from src.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+
+
+def setup_compressed_data_training(cfg: DictConfig) -> Optional[Callback]:
+    """Configure datasets and return the phase-switch callback when enabled."""
+    if not cfg.data.get("enable", False):
+        return None
+
+    apply_compressed_data_config(cfg)
+    prepare_compressed_datasets(cfg)
+    return hydra.utils.instantiate(cfg.data.phase_switch_callback)
 
 
 def apply_compressed_data_config(cfg: DictConfig) -> None:
@@ -31,15 +44,16 @@ def apply_compressed_data_config(cfg: DictConfig) -> None:
         cfg.datamodule.phase2_train_dir = phase2_train
         cfg.datamodule.phase2_val_dir = phase2_val
         cfg.datamodule.switch_epoch = data_cfg.switch_epoch
+        cfg.datamodule.skip_resize_crop = data_cfg.get("skip_resize_crop", True)
+        if data_cfg.get("disable_mixup_cutmix", False):
+            cfg.datamodule.cutmix_alpha = 0.0
+            cfg.datamodule.mixup_alpha = 0.0
 
     log.info(
-        "Compressed data config: phase 1 train=%s, val=%s; phase 2 train=%s, val=%s; "
-        "switch_epoch=%s",
-        phase1_train,
-        phase1_val,
-        phase2_train,
-        phase2_val,
-        data_cfg.switch_epoch,
+        f"Compressed data config: phase 1 train={phase1_train}, val={phase1_val}; "
+        f"phase 2 train={phase2_train}, val={phase2_val}; "
+        f"switch_epoch={data_cfg.switch_epoch}, "
+        f"disable_mixup_cutmix={data_cfg.get('disable_mixup_cutmix', False)}"
     )
 
 
@@ -58,25 +72,18 @@ def prepare_compressed_datasets(cfg: DictConfig) -> None:
     jpeg_val = jpeg_only_dir_name("val", jpeg_quality)
 
     log.info(
-        "Checking compressed datasets (resize=%s, crop=%s, quality=%s, overwrite=%s): "
-        "resized=[%s, %s], jpeg-only=[%s, %s]",
-        resize_size,
-        crop_size,
-        jpeg_quality,
-        overwrite,
-        resized_train,
-        resized_val,
-        jpeg_train,
-        jpeg_val,
+        f"Checking compressed datasets (resize={resize_size}, crop={crop_size}, "
+        f"quality={jpeg_quality}, overwrite={overwrite}): "
+        f"resized=[{resized_train}, {resized_val}], "
+        f"jpeg-only=[{jpeg_train}, {jpeg_val}]"
     )
 
     if not overwrite and compressed_datasets_exist(
         data_dir, resize_size, crop_size, jpeg_quality
     ):
         log.info(
-            "All compressed datasets already exist under %s and overwrite=false; "
-            "skipping compression.",
-            data_dir,
+            f"All compressed datasets already exist under {data_dir} and overwrite=false; "
+            "skipping compression."
         )
         print(
             f"[compressed_data] Skipping compression: resized and JPEG-only datasets "

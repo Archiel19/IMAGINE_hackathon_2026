@@ -14,6 +14,10 @@ seed: 42
 trainer:
   precision: 32
 
+# DATA TEAM (2 phase (low-res + high-res) training, no mixup/cutmix augmentation)
+data:
+  enable: false
+
 module:
   compile: false
 

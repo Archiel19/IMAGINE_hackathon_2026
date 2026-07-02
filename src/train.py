@@ -42,7 +42,7 @@ from src.utils import (
     log_hyperparameters,
     task_wrapper,
 )
-from src.utils.compressed_data import apply_compressed_data_config, prepare_compressed_datasets
+from src.utils.compressed_data import setup_compressed_data_training
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
@@ -77,9 +77,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     trainer: Optional[Trainer] = None
 
     with tracker, sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-        if cfg.get("data"):
-            apply_compressed_data_config(cfg)
-            prepare_compressed_datasets(cfg)
+        phase_switch_callback = setup_compressed_data_training(cfg)
 
         log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
         datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
@@ -100,6 +98,8 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
         log.info("Instantiating callbacks...")
         callback_dict: Dict[str, Callback] = instantiate_callbacks(cfg.get("callbacks"))
+        if phase_switch_callback is not None:
+            callback_dict[phase_switch_callback.__class__.__name__] = phase_switch_callback
         callbacks: List[Callback] = list(callback_dict.values())
 
         log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
