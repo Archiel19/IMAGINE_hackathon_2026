@@ -16,7 +16,7 @@ seed: 42
 data:
   resize_size: 112
   crop_size: 96
-  jpeg_quality: 75
+  jpeg_quality: 50
   overwrite: true # false = if resized/compressed data already exists, use it, true = overwrite it
   # (use true to accurately measure energy usage!)
   switch_epoch: 17 # Switch to phase 2 at this epoch
@@ -30,5 +30,5 @@ callbacks:
     switch_epoch: ${data.switch_epoch}
 # ------------------------------------------------------------
 
-experiment_name: "2_phase_training_jpeg75"
+experiment_name: "2_phase_training_jpeg50"
 tags: ["data", "train"]
